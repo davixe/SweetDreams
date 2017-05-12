@@ -19,3 +19,4 @@ CMakeLists.txt
 .localhistory/
 *.xcworkspace
 Build
+*.DS_Store
