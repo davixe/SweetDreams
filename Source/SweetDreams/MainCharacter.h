@@ -12,7 +12,7 @@ class SWEETDREAMS_API AMainCharacter : public ACharacter
 
 public:
 	// Sets default values for this character's properties
-	AMainCharacter();
+	AMainCharacter(const FObjectInitializer& ObjectInitializer);
 
 protected:
 	// Called when the game starts or when spawned
@@ -25,6 +25,7 @@ public:
 	// Called to bind functionality to input
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-	
-	
+	void MoveForward(float Value);
+
+	void MoveRight(float Value);
 };
