@@ -42,9 +42,9 @@ void AMainCharacter::MoveForward(float Value)
 {
 	if (Controller != NULL && Value != 0.0f)
 	{
-		// Add forward movement.
-		AddMovementInput(FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()).GetScaledAxis(EAxis::X),
-			GetCapsuleComponent()->GetComponentQuat().GetAxisZ()).GetSafeNormal(), Value);
+		//AddMovementInput(FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()).GetScaledAxis(EAxis::X),
+		//	GetCapsuleComponent()->GetComponentQuat().GetAxisZ()).GetSafeNormal(), Value);
+		AddMovementInput(GetCapsuleComponent()->GetForwardVector(), Value);
 	}
 }
 
@@ -52,9 +52,10 @@ void AMainCharacter::MoveRight(float Value)
 {
 	if (Controller != NULL && Value != 0.0f)
 	{
-		const FVector CapsuleUp = GetCapsuleComponent()->GetComponentQuat().GetAxisZ();
+		//const FVector CapsuleUp = GetCapsuleComponent()->GetComponentQuat().GetAxisZ();
 
-		// Add side movement.
-		AddMovementInput(CapsuleUp ^ FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()).GetScaledAxis(EAxis::X), CapsuleUp).GetSafeNormal(), Value);
+		AddMovementInput(GetCapsuleComponent()->GetRightVector(), Value/10);
+
+		//AddMovementInput(CapsuleUp ^ FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()).GetScaledAxis(EAxis::X), CapsuleUp).GetSafeNormal(), Value);
 	}
 }
