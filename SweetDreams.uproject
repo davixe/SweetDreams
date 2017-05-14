@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{2E1F7862-4024-17C1-2591-868CF17FEE00}",
+	"EngineAssociation": "4.15",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -14,11 +14,11 @@
 		}
 	],
 	"Plugins": [
-        {
-            "Name": "FMODStudio",
-            "Enabled": true
-        },
-        {
+		{
+			"Name": "FMODStudio",
+			"Enabled": true
+		},
+		{
 			"Name": "NeoFur",
 			"Enabled": true
 		}
