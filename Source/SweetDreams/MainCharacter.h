@@ -28,4 +28,12 @@ public:
 	void MoveForward(float Value);
 
 	void MoveRight(float Value);
+
+	UFUNCTION(Category = "Pawn|CustomCharacter", BlueprintCallable)
+		virtual void LaunchCharacterRotated(FVector LaunchVelocity, bool bHorizontalOverride, bool bVerticalOverride);
+
+	virtual void ApplyDamageMomentum(float DamageTaken, const FDamageEvent& DamageEvent, APawn* PawnInstigator, AActor* DamageCauser) override;
+	virtual FVector GetPawnViewLocation() const override;
+	virtual void PostNetReceiveLocationAndRotation() override;
+	FORCEINLINE class UCustomCharacterMovementComponent* GetCustomCharacterMovement() const;
 };

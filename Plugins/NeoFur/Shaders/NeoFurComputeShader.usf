@@ -1,0 +1,511 @@
+// ---------------------------------------------------------------------------
+//
+// Copyright (c) 2016 Neoglyphic Entertainment, Inc. All rights reserved.
+//
+// This is part of the NeoFur fur and hair rendering and simulation
+// plugin for Unreal Engine.
+//
+// Do not redistribute NeoFur without the express permission of
+// Neoglyphic Entertainment. See your license for specific details.
+//
+// -------------------------- END HEADER -------------------------------------
+
+#include "Common.usf"
+
+#define EMPTY_FUR_PROGRAM 0
+
+#if !EMPTY_FUR_PROGRAM
+
+// Inputs and outputs.
+
+Buffer<float>   In_BoneMatrices;
+Buffer<float>   In_ControlPoints;           // FNeoFurComponentSceneProxy::ControlPointVertexType  See: ReadControlPoint
+Buffer<float>   In_OriginalMesh;            // FNeoFurComponentSceneProxy::VertexType              See: ReadVertex (TODO)
+Buffer<float>   In_PhysicsProperties;
+Buffer<float>   In_MorphData;
+RWBuffer<float> Out_ControlPoints;          // FNeoFurComponentSceneProxy::ControlPointVertexType  See: WriteControlPoint
+Buffer<float>   In_PerFrameData;
+
+// OBFUSCATE_START
+
+// ----------------------------------------------------------------------
+//
+// This file contains the GPU-side physics simulation code.
+//
+// FNeoFurComponentSceneProxy::RunSimulation_Renderthread_CPU() in
+// NeoFurComponentSceneProxy_CPUSim.cpp should operate very similarly
+// to NeoFurComputeShader_Main(). If this is altered to have different
+// behavior,
+// FNeoFurComponentSceneProxy::RunSimulation_Renderthread_CPU() must
+// be updated to maintain parity between the two versions.
+//
+// ----------------------------------------------------------------------
+
+#define PFD In_PerFrameData
+#define In_ControlPointCount asuint(PFD[0])
+#define In_ShellCount        asuint(PFD[1])
+#define In_TotalShellCount   asuint(PFD[2])
+#define In_ShellDistance     PFD[3]
+#define In_DeltaTime         PFD[4]
+#define In_ShellFade         PFD[5]
+#define In_LocalSpaceGravity float3(PFD[6], PFD[7], PFD[8])
+
+// FIXME: I'm getting thrown off by some packing issues in the
+// FNeoFurComputeShaderPerFrameData structure. So this just the offset
+// of the TransformFromLastFrame value. 9 is what I think it should
+// be. 3 is the offset from that thing I think it should be.
+#define TransformFromLastFrameOffset (3 + 9)
+
+#define In_TransformFromLastFrame				\
+	float4x4(									\
+		PFD[TransformFromLastFrameOffset + 0],	\
+		PFD[TransformFromLastFrameOffset + 1],	\
+		PFD[TransformFromLastFrameOffset + 2],	\
+		PFD[TransformFromLastFrameOffset + 3],	\
+		PFD[TransformFromLastFrameOffset + 4],	\
+		PFD[TransformFromLastFrameOffset + 5],	\
+		PFD[TransformFromLastFrameOffset + 6],	\
+		PFD[TransformFromLastFrameOffset + 7],	\
+		PFD[TransformFromLastFrameOffset + 8],	\
+		PFD[TransformFromLastFrameOffset + 9],	\
+		PFD[TransformFromLastFrameOffset + 10], \
+		PFD[TransformFromLastFrameOffset + 11], \
+		PFD[TransformFromLastFrameOffset + 12], \
+		PFD[TransformFromLastFrameOffset + 13], \
+		PFD[TransformFromLastFrameOffset + 14], \
+		PFD[TransformFromLastFrameOffset + 15])
+		
+#define In_VisibleLengthScale PFD[TransformFromLastFrameOffset + 16]
+
+#define In_BoneMatrices_s In_BoneMatrices
+#define In_OriginalMesh_s In_OriginalMesh
+#define In_PhysicsProperties_s In_PhysicsProperties
+#define In_MorphData_s In_MorphData
+#define In_ControlPoints_s In_ControlPoints
+
+// Offsets into In_OriginalMesh. If the
+// FNeoMeshFurSceneProxy::VertexType structure ever changes, these
+// offsets must be adjusted accordingly.
+
+#define ANIMVERTEXTYPE_OFFSET_POSITION_X 0
+#define ANIMVERTEXTYPE_OFFSET_POSITION_Y 1
+#define ANIMVERTEXTYPE_OFFSET_POSITION_Z 2
+#define ANIMVERTEXTYPE_OFFSET_TANX_X     3
+#define ANIMVERTEXTYPE_OFFSET_TANX_Y     4
+#define ANIMVERTEXTYPE_OFFSET_TANX_Z     5
+#define ANIMVERTEXTYPE_OFFSET_TANZ_X     6
+#define ANIMVERTEXTYPE_OFFSET_TANZ_Y     7
+#define ANIMVERTEXTYPE_OFFSET_TANZ_Z     8
+
+#define ANIMVERTEXTYPE_OFFSET_BONEIDS    (9 + 2 * 4)
+#define ANIMVERTEXTYPE_OFFSET_BONEWEIGHTS (9 + 2 * 4 + 2)
+
+#define ANIMVERTEXTYPE_OFFSET_UV_SHELLALPHA 12
+
+#define ANIMVERTEXTYPE_OFFSET_COMBVEC (9 + 2 * 4 + 3)
+#define ANIMVERTEXTYPE_OFFSET_VELOCITY (ANIMVERTEXTYPE_OFFSET_COMBVEC + 3)
+
+// Total stride, added up for Position (3), TanX (3), TanZ (3), Texture coords
+// (2*4), bone weights (1), bone influences (1), comb vector (3), velocity(3).
+#define ANIMVERTEXTYPE_STRIDE (3 + 3 + 3 + 2 * 4 + 2 + 3 + 3 + 1)
+
+// Offsets into In_PhysicsProperties. If the FNeoFurPhysicsParameters structure
+// ever changes, these must be updated.
+
+#define PHYSICSPARAMETERS_VELOCITYINFLUENCE_OFFSET         0
+#define PHYSICSPARAMETERS_SPRINGLENGTHSTIFFNESS_OFFSET     1
+#define PHYSICSPARAMETERS_SPRINGANGLESTIFFNESS_OFFSET      2
+#define PHYSICSPARAMETERS_SPRINGDAMPENINGMULTIPLIER_OFFSET 3
+#define PHYSICSPARAMETERS_GRAVITYINFLUENCE_OFFSET          4
+#define PHYSICSPARAMETERS_AIRRESISTANCEMULTIPLIER_OFFSET   5
+#define PHYSICSPARAMETERS_MAXSTRETCHDISTANCE_OFFSET        6
+#define PHYSICSPARAMETERS_MAXROTATIONFROMNORMAL_OFFSET     7
+#define PHYSICSPARAMETERS_RADIALFORCEINFLUENCE_OFFSET      8
+#define PHYSICSPARAMETERS_WINDINFLUENCE_OFFSET             9
+#define PHYSICSPARAMETERS_BENDINESS_OFFSET                 10
+#define PHYSICSPARAMETERS_NORMALDIRECTIONBLEND_OFFSET      11
+#define PHYSICSPARAMETERS_STRUCT_END (PHYSICSPARAMETERS_NORMALDIRECTIONBLEND_OFFSET + 1)
+
+#define PHYSICSPARAMETERS_RADIALINPUTS_START           PHYSICSPARAMETERS_STRUCT_END
+#define PHYSICSPARAMETERS_RADIALINPUTS_STRIDE          5
+#define PHYSICSPARAMETERS_RADIALINPUTS_COUNT           4 // Must match NeoFurFramePhysicsInputsNumLocalForces
+#define PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_ORIGIN   0
+#define PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_RADIUS   3
+#define PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_STRENGTH 4
+
+#define PHYSICSPARAMETERS_WINDVECTOR_OFFSET (PHYSICSPARAMETERS_RADIALINPUTS_START + PHYSICSPARAMETERS_RADIALINPUTS_STRIDE * PHYSICSPARAMETERS_RADIALINPUTS_COUNT)
+#define PHYSICSPARAMETERS_WINDGUSTS_OFFSET (PHYSICSPARAMETERS_WINDVECTOR_OFFSET + 3)
+
+// These encode or decode values that are actually in an array of
+// FNeoFurComponentSceneProxy::ControlPointVertexType. If that structure
+// changes, update these.
+
+void WriteControlPoint(
+	in int Index, in float3 Position,
+	in float3 Velocity, in float3 RootPosition,
+	in float3 SplineDir, in float3 Normal)
+{
+	int BaseIndex = Index * 15;
+	Out_ControlPoints[BaseIndex + 0 ] = Position.x;
+	Out_ControlPoints[BaseIndex + 1 ] = Position.y;
+	Out_ControlPoints[BaseIndex + 2 ] = Position.z;
+	Out_ControlPoints[BaseIndex + 3 ] = Velocity.x;
+	Out_ControlPoints[BaseIndex + 4 ] = Velocity.y;
+	Out_ControlPoints[BaseIndex + 5 ] = Velocity.z;
+	Out_ControlPoints[BaseIndex + 6 ] = RootPosition.x;
+	Out_ControlPoints[BaseIndex + 7 ] = RootPosition.y;
+	Out_ControlPoints[BaseIndex + 8 ] = RootPosition.z;
+
+	// This is data that we write out for the renderer, but do not
+	// read as part of the simulation.
+	Out_ControlPoints[BaseIndex + 9 ] = SplineDir.x;
+	Out_ControlPoints[BaseIndex + 10] = SplineDir.y;
+	Out_ControlPoints[BaseIndex + 11] = SplineDir.z;
+	Out_ControlPoints[BaseIndex + 12] = Normal.x;
+	Out_ControlPoints[BaseIndex + 13] = Normal.y;
+	Out_ControlPoints[BaseIndex + 14] = Normal.z;
+}
+
+void ReadControlPoint(
+	in int Index, out float3 Position,
+	out float3 Velocity, out float3 RootPosition)
+{
+	int BaseIndex = Index * 15;
+	Position.x     = In_ControlPoints_s[BaseIndex + 0];
+	Position.y     = In_ControlPoints_s[BaseIndex + 1];
+	Position.z     = In_ControlPoints_s[BaseIndex + 2];
+	Velocity.x     = In_ControlPoints_s[BaseIndex + 3];
+	Velocity.y     = In_ControlPoints_s[BaseIndex + 4];
+	Velocity.z     = In_ControlPoints_s[BaseIndex + 5];
+	RootPosition.x = In_ControlPoints_s[BaseIndex + 6];
+	RootPosition.y = In_ControlPoints_s[BaseIndex + 7];
+	RootPosition.z = In_ControlPoints_s[BaseIndex + 8];
+
+	// Not needed: Last frame spline direction (3 floats), and last
+	// frame normal (3 floats).
+}
+
+float3 GetPositionForShell(float ShellAlpha, float3 SkinnedFinalPosition, float3 SkinnedFinalSplineDir, float3 ControlPointPosition)
+{
+	// FIXME: This might be much more efficient if we computed it
+	// outside the loop and used a lookup table.
+	float BlendedPointAlpha = 1.0 - pow(1.0 - ShellAlpha, In_PhysicsProperties_s[PHYSICSPARAMETERS_BENDINESS_OFFSET]);
+	float3 BlendedPoint =
+		(1.0 - BlendedPointAlpha) * (SkinnedFinalPosition + SkinnedFinalSplineDir * In_ShellDistance) +
+		BlendedPointAlpha * ControlPointPosition;
+
+	float positionAlpha = ShellAlpha * In_ShellFade * In_VisibleLengthScale;
+	float3 NewPoint_Position =
+		(1.0 - positionAlpha) * SkinnedFinalPosition +
+		positionAlpha * BlendedPoint;
+
+	return NewPoint_Position;
+}
+
+[numthreads(1,1,1)]
+void NeoFurComputeShader_Main(
+	uint3 GroupThreadId    : SV_GroupThreadID,
+	uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	int i = DispatchThreadId.x;
+	{
+		int OriginalMesh_BaseIndex = i * ANIMVERTEXTYPE_STRIDE;
+		int ControlPoint_BaseIndex = i * 6;
+
+		// Compute skinned vertex location and normal/tangent.
+		// --------------------------------------------------------------------
+		
+		// Bone IDs are 4x16-bit uints, but we need to pull them out
+		// of the vertx data as 2x32-bit floats.
+		float BoneIds_f1 = In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_BONEIDS];
+		float BoneIds_f2 = In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_BONEIDS + 1];
+		uint  BoneIds_u1 = asuint(BoneIds_f1);
+		uint  BoneIds_u2 = asuint(BoneIds_f2);
+
+		uint BoneIds[4];
+		BoneIds[0] = BoneIds_u1 & 65535;
+		BoneIds[1] = (BoneIds_u1 >> 16) & 65535;
+		BoneIds[2] = BoneIds_u2 & 65535;
+		BoneIds[3] = (BoneIds_u2 >> 16) & 65535;
+		
+		float BoneWeights_f = In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_BONEWEIGHTS];
+		uint  BoneWeights_u = asuint(BoneWeights_f);
+
+		float3 OriginalPosition =
+			float3(
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_POSITION_X],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_POSITION_Y],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_POSITION_Z]) +
+			float3(
+				In_MorphData_s[i * 6 + 0],
+				In_MorphData_s[i * 6 + 1],
+				In_MorphData_s[i * 6 + 2]);
+
+		float3 OriginalTanX =
+			float3(
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANX_X],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANX_Y],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANX_Z]);
+
+		float3 OriginalTanZ =
+			float3(
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANZ_X],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANZ_Y],
+				In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_TANZ_Z]) +
+			float3(
+				In_MorphData_s[i * 6 + 3],
+				In_MorphData_s[i * 6 + 4],
+				In_MorphData_s[i * 6 + 5]);
+
+		float3 OriginalSplineDir = float3(
+			In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_COMBVEC],
+			In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_COMBVEC+1],
+			In_OriginalMesh_s[OriginalMesh_BaseIndex + ANIMVERTEXTYPE_OFFSET_COMBVEC+2]);
+		float3 SkinnedFinalPosition  = float3(0.0, 0.0, 0.0);
+		float3 SkinnedFinalTanX      = float3(0.0, 0.0, 0.0);
+		float3 SkinnedFinalTanZ      = float3(0.0, 0.0, 0.0);
+		float3 SkinnedFinalSplineDir = float3(0.0, 0.0, 0.0);
+		float TotalWeight = 0.0f;
+
+		for(int BoneNum = 0; BoneNum < 4; BoneNum++) {
+		    
+			uint BoneId        = BoneIds[BoneNum];
+			uint BoneWeight_u  = (BoneWeights_u >> (BoneNum*8)) & 255;
+			float BoneWeight_f = float(BoneWeight_u) / 255.0;
+
+			// FIXME: Decode all this data without a for-loop. Then find out if it's actually faster.
+
+			float4x4 BoneMat = float4x4(
+				1.0, 0.0, 0.0, 0.0,
+				0.0, 1.0, 0.0, 0.0,
+				0.0, 0.0, 1.0, 0.0,
+				0.0, 0.0, 0.0, 1.0);
+				
+			for(int x = 0; x < 4; x++) {
+				for(int y = 0; y < 4; y++) {
+					BoneMat[x][y] = In_BoneMatrices_s[16 * BoneId + (x + y * 4)];
+				}
+			}
+
+			float4x4 BoneMatRot = BoneMat;
+			BoneMatRot[0][3] = 0.0;
+			BoneMatRot[1][3] = 0.0;
+			BoneMatRot[2][3] = 0.0;
+			BoneMatRot[3][0] = 0.0;
+			BoneMatRot[3][1] = 0.0;
+			BoneMatRot[3][2] = 0.0;
+
+			float4 hPos    = mul(BoneMat,    float4(OriginalPosition.xyz,  1.0));
+			float4 hTanX   = mul(BoneMatRot, float4(OriginalTanX.xyz,      1.0));
+			float4 hTanZ   = mul(BoneMatRot, float4(OriginalTanZ.xyz,      1.0));
+			float4 hSpline = mul(BoneMatRot, float4(OriginalSplineDir.xyz, 1.0));
+			
+			SkinnedFinalPosition   += (hPos.xyz  / hPos.w ) * BoneWeight_f;
+			SkinnedFinalTanX       += (hTanX.xyz / hTanX.w) * BoneWeight_f;
+			SkinnedFinalTanZ       += (hTanZ.xyz / hTanZ.w) * BoneWeight_f;
+			SkinnedFinalSplineDir  += (hSpline.xyz / hSpline.w) * BoneWeight_f;
+			TotalWeight += BoneWeight_f;
+		}
+
+		if(TotalWeight) {
+			SkinnedFinalPosition  /= TotalWeight;
+			SkinnedFinalTanX      /= TotalWeight;
+			SkinnedFinalTanZ      /= TotalWeight;
+			SkinnedFinalSplineDir /= TotalWeight;
+		}
+		
+		float3 ControlPointPosition;
+		float3 ControlPointPosition_Old; // For motion blur.
+		float3 ControlPointVelocity;
+		float3 OldRootPosition;
+		ReadControlPoint(i, ControlPointPosition, ControlPointVelocity, OldRootPosition);
+		ControlPointPosition_Old = ControlPointPosition;
+		float SplineLength = length(SkinnedFinalSplineDir) * In_ShellDistance;
+		float3 NormalizedSplineDir = normalize(SkinnedFinalSplineDir);
+
+		// Velocity as a result of the different transform.
+		// --------------------------------------------------------------------
+
+		// General velocity "fudge". Not realistic, but makes it look stiff by
+		// faking it.
+		float VelocityAlpha = In_PhysicsProperties_s[PHYSICSPARAMETERS_VELOCITYINFLUENCE_OFFSET];
+		float4 NewTransformControlPointPos = (mul(float4(ControlPointPosition.xyz, 1.0), In_TransformFromLastFrame));
+		NewTransformControlPointPos /= NewTransformControlPointPos.w;
+		ControlPointPosition =
+			VelocityAlpha          * NewTransformControlPointPos.xyz +
+			(1.0f - VelocityAlpha) * ControlPointPosition; // FIXME: Work skinning into this equation.
+		// TODO: Velocity needs to be transformed too!
+
+		// Spring simulation.
+		// --------------------------------------------------------------------
+		{
+			float3 TotalSpringForce = float3(0.0f, 0.0f, 0.0f);
+			
+			// Spring length stuff.
+			float3 SpringVector = ControlPointPosition - SkinnedFinalPosition;
+			float SpringLength = length(SpringVector);
+
+			if(SpringLength > 0.01f) {
+			    
+				// Linear spring.
+				// TODO: Add maximum position offset clamping (max spring squish/stretch). That can help prevent fast motions from letting the control point sink into the body.
+				float SpringRestLength = SplineLength;
+				float SpringOffset = SpringRestLength - SpringLength;
+				float SpringStiffness = In_PhysicsProperties_s[PHYSICSPARAMETERS_SPRINGLENGTHSTIFFNESS_OFFSET];
+				float SpringForce = SpringStiffness * SpringOffset;
+				TotalSpringForce += (SpringVector / SpringLength) * SpringForce;  // FIXME: Div0 error.
+
+				// Torsion spring stuff.
+				// TODO: Add maximum angle offset clamping. That can help prevent fast motions from letting the control point sink into the body.
+				float dp = dot((SpringVector / SpringLength), NormalizedSplineDir);
+				float AngleOffset = 0.0f;
+				if(dp < 1.0) {
+					AngleOffset = acos(dp);
+				}
+				float AngleSpringStiffness = In_PhysicsProperties_s[PHYSICSPARAMETERS_SPRINGANGLESTIFFNESS_OFFSET];
+				if (AngleOffset > 0.01f) {
+					float3 SkinnedPositionTarget = SkinnedFinalPosition + NormalizedSplineDir * SplineLength;
+					float3 AngleSpringReturnForceDirection = SkinnedPositionTarget - ControlPointPosition;
+					AngleSpringReturnForceDirection = normalize(AngleSpringReturnForceDirection);
+					float3 FinalReturnVelocity = AngleSpringReturnForceDirection * In_DeltaTime * AngleSpringStiffness * AngleOffset;
+					
+					// Clamp to maximum required velocity to get to rest position this frame.
+					if (length(ControlPointPosition - SkinnedPositionTarget) < length(FinalReturnVelocity * In_DeltaTime)) {
+						FinalReturnVelocity = (SkinnedPositionTarget - ControlPointPosition) / In_DeltaTime;
+					}
+					TotalSpringForce += FinalReturnVelocity / In_DeltaTime;
+				}
+			}
+
+			float SpringDampening = In_PhysicsProperties_s[PHYSICSPARAMETERS_SPRINGDAMPENINGMULTIPLIER_OFFSET];
+			
+			ControlPointVelocity += TotalSpringForce * In_DeltaTime * SpringDampening;
+		}
+
+		// Gravity
+		// --------------------------------------------------------------------
+		ControlPointVelocity += In_PhysicsProperties_s[PHYSICSPARAMETERS_GRAVITYINFLUENCE_OFFSET] * In_DeltaTime * In_LocalSpaceGravity;
+
+		// Radial force effects. (TODO: Incomplete!)
+		// --------------------------------------------------------------------
+
+		float RadialForceInfluence = In_PhysicsProperties_s[PHYSICSPARAMETERS_RADIALFORCEINFLUENCE_OFFSET];
+		for(int k = 0; k < PHYSICSPARAMETERS_RADIALINPUTS_COUNT; k++) {
+			int RadialInputBase = PHYSICSPARAMETERS_RADIALINPUTS_START + PHYSICSPARAMETERS_RADIALINPUTS_STRIDE * k;
+			float3 RadialForceVector = ControlPointPosition - float3(
+				In_PhysicsProperties_s[RadialInputBase + PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_ORIGIN],
+				In_PhysicsProperties_s[RadialInputBase + PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_ORIGIN + 1],
+				In_PhysicsProperties_s[RadialInputBase + PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_ORIGIN + 2]);
+			float RadialForceDistance = length(RadialForceVector);
+			float RadialForceScale = 1.0f - (RadialForceDistance / In_PhysicsProperties_s[RadialInputBase + PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_RADIUS]);
+			if(RadialForceDistance && RadialForceScale > 0.0f) {
+				RadialForceVector /= RadialForceDistance;
+				ControlPointVelocity +=
+					RadialForceVector *
+					In_PhysicsProperties_s[RadialInputBase + PHYSICSPARAMETERS_RADIALINPUTS_OFFSET_STRENGTH] *
+					RadialForceScale *
+					RadialForceInfluence;
+			}
+		}
+
+		// Wind
+		// --------------------------------------------------------------------
+
+		float3 WindVector = float3(
+			In_PhysicsProperties_s[PHYSICSPARAMETERS_WINDVECTOR_OFFSET],
+			In_PhysicsProperties_s[PHYSICSPARAMETERS_WINDVECTOR_OFFSET+1],
+			In_PhysicsProperties_s[PHYSICSPARAMETERS_WINDVECTOR_OFFSET+2]) * In_DeltaTime;
+		ControlPointVelocity += WindVector;
+		ControlPointVelocity += WindVector * sin(dot(ControlPointPosition, WindVector)) * In_PhysicsProperties_s[PHYSICSPARAMETERS_WINDGUSTS_OFFSET];
+		
+		// "Air Resistance" Dampening - Deceleration proportional to velocity.
+		// --------------------------------------------------------------------
+
+		ControlPointVelocity *= In_PhysicsProperties_s[PHYSICSPARAMETERS_AIRRESISTANCEMULTIPLIER_OFFSET];
+		
+		// Finally, apply the velocity to the particle's position.
+		// --------------------------------------------------------------------
+
+		if(!isnan(ControlPointVelocity.x) && !isnan(ControlPointVelocity.y) && !isnan(ControlPointVelocity.z) &&
+			isfinite(ControlPointVelocity.x) && isfinite(ControlPointVelocity.y) && isfinite(ControlPointVelocity.z))
+		{
+			ControlPointPosition += ControlPointVelocity * In_DeltaTime;
+		} else {
+			ControlPointVelocity = float3(0.0, 0.0, 0.0);
+		}
+
+		// Max distance clamp.
+		// --------------------------------------------------------------------
+
+		float Distance = length(ControlPointPosition - SkinnedFinalPosition);
+		float MaxDistance = SplineLength * In_PhysicsProperties_s[PHYSICSPARAMETERS_MAXSTRETCHDISTANCE_OFFSET];
+		if (Distance > MaxDistance) {
+			float3 NewOffset = ((ControlPointPosition - SkinnedFinalPosition) / Distance) * MaxDistance;
+			ControlPointPosition = SkinnedFinalPosition + NewOffset;
+		}
+
+		// TODO: Min distance clamp.
+		// --------------------------------------------------------------------
+
+		// Max angle clamp.
+		// --------------------------------------------------------------------
+		
+		// FIXME: Wasting time by doing degree-to-radian conversion here.
+		float MaxRotation = In_PhysicsProperties_s[PHYSICSPARAMETERS_MAXROTATIONFROMNORMAL_OFFSET] * 3.14159/180.0;
+		float3 ControlPointOffset = (ControlPointPosition - SkinnedFinalPosition);
+		float3 NormalizedTanZ = NormalizedSplineDir;
+		float3 NormalizedOffset = normalize(ControlPointOffset);
+		if(acos(dot(NormalizedTanZ, NormalizedOffset)) > MaxRotation) {
+
+			// Make a rotation matrix that can bring us into a coordinate space
+			// defined by the normal, a unit length vector that is coplanar with
+			// the normal and offset while also perpendicular to the normal, and
+			// an axis perpendicular to both of those.
+			float3 axis0 = NormalizedTanZ;
+			float3 axis1 = normalize(cross(NormalizedOffset, axis0));
+			float3 axis2 = cross(axis0, axis1);
+			float3x3 rotMat = float3x3(axis0, axis1, axis2);
+
+			// Convert to the local coordinate space.
+			float3 LocalControlPointOffset = mul(ControlPointOffset, transpose(rotMat));
+			
+			// Do the acual clamping in the local coordinate space, where the
+			// rotation axes are a simple sin/cos (and y=0 to stay on the right
+			// plane).
+			float xSide = sign(LocalControlPointOffset.z);
+			LocalControlPointOffset.x = cos(MaxRotation);
+			LocalControlPointOffset.z = sin(MaxRotation) * xSide;
+			// y=0 plane is the plane that the origin, the skinned position, and
+			// the control point all exist on. We definitely want to stay there.
+			LocalControlPointOffset.y = 0;
+
+			// Restore the length of the original offset.
+			LocalControlPointOffset = normalize(LocalControlPointOffset) * length(ControlPointOffset);
+
+			// Convert back to object space.
+			ControlPointOffset = mul(LocalControlPointOffset, rotMat);
+			ControlPointPosition = ControlPointOffset + SkinnedFinalPosition;
+		}
+		
+		// Write control points.
+		// --------------------------------------------------------------------
+
+		float3 NormalizedFinalTanZ = normalize(SkinnedFinalTanZ);
+		
+		for(int k = 0; k < In_ShellCount; k++) {
+			WriteControlPoint(
+				i + In_ControlPointCount * k, ControlPointPosition,
+				ControlPointVelocity, SkinnedFinalPosition,
+				SkinnedFinalSplineDir,
+				NormalizedFinalTanZ);
+		}
+
+	}
+
+}
+
+#endif
+
+
+
+
