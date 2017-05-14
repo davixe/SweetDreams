@@ -20,3 +20,4 @@ CMakeLists.txt
 *.xcworkspace
 Build
 *.DS_Store
+Content/ThirdPersonBP/Maps/ThirdPersonExampleMap_BuiltData.uasset

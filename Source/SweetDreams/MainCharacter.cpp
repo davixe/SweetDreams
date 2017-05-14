@@ -45,7 +45,7 @@ void AMainCharacter::MoveForward(float Value)
 	{
 		//AddMovementInput(FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()).GetScaledAxis(EAxis::X),
 		//	GetCapsuleComponent()->GetComponentQuat().GetAxisZ()).GetSafeNormal(), Value);
-		//AddMovementInput(GetCapsuleComponent()->GetForwardVector(), Value);
+		AddMovementInput(GetCapsuleComponent()->GetForwardVector(), Value);
 	}
 }
 
@@ -63,7 +63,7 @@ void AMainCharacter::MoveRight(float Value)
 		//AddMovementInput(GetCapsuleComponent()->GetComponentQuat().GetAxisY(), Value/10);
 
 		//if (GetCharacterMovement()->Velocity.Size() > 1) {
-			//AddMovementInput(GetCapsuleComponent()->GetRightVector(), Value/100);
+			AddMovementInput(GetCapsuleComponent()->GetRightVector(), Value/100);
 			//AddMovementInput(CapsuleUp ^ FVector::VectorPlaneProject(FRotationMatrix(Controller->GetControlRotation()), CapsuleUp).GetSafeNormal(), Value);
 		//} 		
 
